@@ -1,0 +1,217 @@
+---
+title: "Biking with Bub."
+date: '`r format(Sys.Date(), "%d %B %Y")`'
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    version: '1.0'
+    css: corp-styles.css
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())  # remove all data from global environment.
+setwd("~/Documents/Workspace/R-project/cycling")
+
+library(flexdashboard)
+library(tidyverse)
+#library(kableExtra)
+#library(stringr)
+library(leaflet)
+library(rgdal)    # GDAL bindings for loading GPX-data
+library(sp)       # spatial operations library
+library(lubridate)# datetime-operatings, here to convert from strings
+library(ggplot2)  # general plotting library
+library(exifr)
+library(leafpop)
+```
+
+
+
+```{r load, message=FALSE, warning=FALSE} 
+
+GPX_file <- 'source/Fietstocht_1.gpx'
+wp <- readOGR(GPX_file, layer = "track_points")
+
+
+```
+
+
+```{r elevation} 
+
+#head(wp[,c('ele', 'time')])
+
+
+
+dif <- max(wp$ele) - min(wp$ele) # height climbed in meters
+
+dif <- round(dif, digits = 2)
+
+```
+
+
+```{r distance}
+distance <- spDists(wp, segments=TRUE)
+sum_dist <- sum(distance) 
+sum_dist <- round(sum_dist, digits = 2)
+
+
+```
+
+```{r plot_dist}
+wp$time <- ymd_hms(wp$time)   # convert timestamps to datetime-objects
+
+dispt <- spDists(wp, segments = TRUE)
+
+dispt <- as.data.frame(dispt)
+
+dispt[nrow(dispt) + 1,] = c(0)
+
+#sum(dispt)
+
+
+wp2 <- as.data.frame(wp)
+
+wp2 <- wp2 %>% 
+  select(track_seg_point_id, ele, time, coords.x1, coords.x2)
+
+wp2 <- cbind(wp2, dispt)
+wp2$cumdist <- cumsum(wp2$dispt)
+
+p <- ggplot(data = wp2) +  
+  aes(x=cumdist, y=ele) + 
+  geom_area(color = "brown", fill = "yellow") + 
+  labs(x='cycling distance', y='Elevations (meters)') + 
+  theme(text = element_text(size = 8))
+```
+
+
+```{r track}
+track <- readOGR(GPX_file, layer = "tracks", verbose = FALSE)
+```
+
+```{r layers}
+m <- leaflet() %>%
+
+  # Add tiles
+  addProviderTiles("OpenStreetMap.Mapnik", group = "Road map") %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
+
+  addLegend(position = 'bottomright',opacity = 0.4,
+            colors = 'blue',
+            labels = 'Nijmegen',
+            title = 'cycling tour') %>%
+
+  # Layers control
+  addLayersControl(position = 'bottomright',
+    baseGroups = c("Road map", "Satellite"),
+    overlayGroups = c("Cycling routes", "Photo markers"),
+    options = layersControlOptions(collapsed = FALSE)) %>%
+
+  addPolylines(data=track, color='blue', group='Cycling routes')
+
+
+```
+
+```{r layers2}
+
+files <- list.files(pattern = "*.JPG", recursive = TRUE)
+dat <- read_exif(files)
+
+# Extract only the usefull data
+dat2 <- select(dat,
+	SourceFile, DateTimeOriginal,
+	GPSLongitude, GPSLatitude, GPSAltitude)
+
+	#write.csv(dat2, 'Exifdata.csv',
+#	row.names = F)
+
+
+```
+
+
+```{r combine}
+
+greenLeafIcon <- makeIcon(
+  iconUrl = "http://leafletjs.com/examples/custom-icons/leaf-green.png",
+  iconWidth = 38, iconHeight = 95,
+  iconAnchorX = 22, iconAnchorY = 94,
+  shadowUrl = "http://leafletjs.com/examples/custom-icons/leaf-shadow.png",
+  shadowWidth = 50, shadowHeight = 64,
+  shadowAnchorX = 4, shadowAnchorY = 62
+)
+
+
+
+m <- leaflet() %>%
+
+  # Add tiles
+  addProviderTiles("OpenStreetMap.Mapnik", group = "Road map") %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
+
+  addLegend(position = 'bottomright',opacity = 0.4, 
+            colors = 'blue', 
+            labels = 'Nijmegen',
+            title = 'cycling tour') %>%
+
+  # Layers control
+  addLayersControl(position = 'bottomright',
+    baseGroups = c("Road map", "Satellite"),
+    overlayGroups = c("Cycling routes", "Photo markers"),
+    options = layersControlOptions(collapsed = FALSE)) %>%
+
+  addPolylines(data=track, color='blue', group='Cycling routes') %>% 
+  
+  addMarkers(data = dat2, lng=dat2$GPSLongitude, lat=dat2$GPSLatitude,  
+                icon = greenLeafIcon, 
+                group = "Photo markers",
+               popup = popupImage(files, src = "local", embed = TRUE) 
+    )  
+
+```
+
+
+around Nijmegen
+=======================================================================
+
+Row
+-----------------------------------------------------------------------
+
+### Elevation {.value-box}
+```{r}
+
+valueBox(value = dif, 
+         caption = "Elevation-difference (m)", 
+         icon="ion-arrow-graph-up-right")
+
+
+```
+
+### Elevation over Distance 
+
+```{r plot, fig.height = 1, fig.width = 10, fig.align = "center"}
+p
+```
+
+
+### Total distance {.value-box}
+
+```{r}
+
+valueBox(value = sum_dist, 
+         caption = "Distance (km)", 
+         icon="ion-android-bicycle")
+
+
+```
+
+
+
+Row 
+-----------------------------------------------------------------------
+### Track
+
+```{r}
+m
+```
+

@@ -1,0 +1,272 @@
+---
+title: "Biking with Bub."
+author: Script by Robert ten Hove.
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: show
+    css: corp-styles.css
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    self_contained: yes
+    toc: FALSE
+    toc_depth: 3
+    toc_float: true
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+version: '2.1'
+---
+
+<img src="./source/Bub.jpg" style="position:absolute;top:0px;right:0px;" />
+<div class="watermark">Free of use</div>
+
+# Introduction 
+For friends living in far away countries, I wanted to share how my area looks like. A kind of google maps with streetview. I pictures myself a dashboard showing the journey I took and with popup pictures that I made on the way. This document described how data from a GPS app can be extracted and combined with photo metadata.  
+Struggling with spatial data, I found [Maarten Hermans'](https://mhermans.net/ blog). (Special thanks to Maarten for helping me).  
+
+# Load libraries
+```{r libraries, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+
+rm(list = ls())  # remove all data from global environment.
+setwd("~/Documents/Workspace/R-project/cycling")
+#setwd("~/Documents/bi/bi./bi")  #Set working directory
+# Load libraries for importing text and plotting data
+library(tidyverse)
+# library(ggplot2)
+# library(plotly)
+# library(formattable)
+# library(sparkline)
+library(kableExtra)
+library(stringr)
+library(leaflet)
+# library(heatmaply)
+# library(reshape)
+# library(matrixStats)
+library(rgdal)    # GDAL bindings for loading GPX-data
+library(sp)       # spatial operations library
+library(lubridate)# datetime-operatings, here to convert from strings
+library(ggplot2)  # general plotting library
+library(exifr)
+library(leafpop)
+#library(htmltools)
+```
+
+# Load data 
+Data was recorded on an iPhone 6s, using the app [GPS Tracker](https://apps.apple.com/us/app/gps-tracker-pro/id984920064) .  
+
+```{r load_data, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+
+GPX_file <- 'source/Fietstocht_1.gpx'
+wp <- readOGR(GPX_file, layer = "track_points")
+
+```
+# Elevation 
+Elevation is one of the variables being recorded and can be simply extracted from one column.  
+Diffence between highest en lowest point.  
+```{r height, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+
+head(wp[,c('ele', 'time')])
+
+
+
+dif <- max(wp$ele) - min(wp$ele) # height climbed in meters
+
+```
+
+Difference in highest and lowest height is `r dif` meters.  
+  
+# Distance 
+Other variables are a bit more tricky to extract, such as distance. In contract to what some people say, the earth is a spherical object. Calculating the distance between two coordinates can be conveniently performed with specialized functions included in R-libraries such as `sp`.Using the functions `spDist()` and `sum()`, the total traveled distance traveled can be derived.  
+
+```{r distance, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+distance <- spDists(wp, segments=TRUE)
+sum_dist <- sum(distance) 
+
+```
+The cycled distance is `r sum_dist` km.  
+  
+The distance between way-points can be plotted against elevation.   
+
+```{r elevation, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+wp$time <- ymd_hms(wp$time)   # convert timestamps to datetime-objects
+
+dispt <- spDists(wp, segments = TRUE)
+
+dispt <- as.data.frame(dispt)
+
+dispt[nrow(dispt) + 1,] = c(0)
+
+#sum(dispt)
+
+
+wp2 <- as.data.frame(wp)
+
+wp2 <- wp2 %>% 
+  select(track_seg_point_id, ele, time, coords.x1, coords.x2)
+
+wp2 <- cbind(wp2, dispt)
+wp2$cumdist <- cumsum(wp2$dispt)
+
+p <- ggplot(data = wp2) +  
+  aes(x=cumdist, y=ele) + 
+  geom_area(color = "brown", fill = "yellow") + 
+  labs(x='cycling distance', y='Elevations (meters)')
+
+p
+```
+
+# Leaflet 
+Apart from the individual waypoints, the whole track can be displayed on an interactive map using **Leaflet Library**.   
+
+Reading-in and displaying the GPX-track through Leaflet can be done in two lines:  
+
+
+```{r track, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+
+track <- readOGR(GPX_file, layer = "tracks", verbose = FALSE)
+
+```
+Then, to plot the *track* on OpenStreetMap...   
+
+```{r layers, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+m <- leaflet() %>%
+
+  # Add tiles
+  addProviderTiles("OpenStreetMap.Mapnik", group = "Road map") %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
+
+  addLegend(position = 'bottomright',opacity = 0.4,
+            colors = 'blue',
+            labels = 'Nijmegen',
+            title = 'cycling tour') %>%
+
+  # Layers control
+  addLayersControl(position = 'bottomright',
+    baseGroups = c("Road map", "Satellite"),
+    overlayGroups = c("Cycling routes", "Photo markers"),
+    options = layersControlOptions(collapsed = FALSE)) %>%
+
+  addPolylines(data=track, color='blue', group='Cycling routes')
+
+
+```
+
+Photos made during the journey can be added as popups to the track. Each individual photo contains a load of meta-data which can be extracted with the function `read_exif()`. One picture contains 136 variables!  
+
+
+```{r layers2, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+# exif_datetime <- function(path) {
+#   # read out the picture-taken datetime for a file using exiftool
+# 
+#   exif_cmd <- 'exiftool -T -r -DateTimeOriginal '  
+#   cmd <- paste(exif_cmd, '"', path, '"', sep='')
+#   exif_timestamp <- system(cmd, intern = TRUE) # execute exiftool-command
+# 
+#   exif_timestamp
+# }
+# 
+# photo_timestamp <- exif_datetime('pics/IMG_0187.JPG')
+# photo_timestamp
+
+
+files <- list.files(pattern = "*.JPG", recursive = TRUE)
+dat <- read_exif(files)
+
+# Extract only the usefull data
+dat2 <- select(dat,
+	SourceFile, DateTimeOriginal,
+	GPSLongitude, GPSLatitude, GPSAltitude)
+
+	#write.csv(dat2, 'Exifdata.csv',
+#	row.names = F)
+
+
+```
+Finally, combine photo's with map.  
+```{r combine, echo=TRUE, warning=FALSE, message=FALSE, include=TRUE}
+
+greenLeafIcon <- makeIcon(
+  iconUrl = "http://leafletjs.com/examples/custom-icons/leaf-green.png",
+  iconWidth = 38, iconHeight = 95,
+  iconAnchorX = 22, iconAnchorY = 94,
+  shadowUrl = "http://leafletjs.com/examples/custom-icons/leaf-shadow.png",
+  shadowWidth = 50, shadowHeight = 64,
+  shadowAnchorX = 4, shadowAnchorY = 62
+)
+
+
+
+# generatePhotoMarkers <- function(photo_dir, waypoints, base_url, time_offset=0) {
+# 
+#   # read in exif timestamps, add to metadata dataframe
+#   d.photos <- photo_metadata(photo_dir, base_url)
+# 
+#   # change/align timestamps if needed
+#   d.photos$photo_timestamp <- d.photos$photo_timestamp - duration(time_offset, 'seconds')
+# 
+#   # match timestamp with closest WP
+#   d.photos <- cbind(
+#     d.photos,
+#     ldply(d.photos$photo_timestamp, .fun = nearest_waypoint, waypoints))
+
+
+  # generate_popup_html <- function(x){
+  #   html <-  "<div>
+  #               <a target='_blank' href='PHOTOPATH'><img width=100%, height=100% src='PHOTOPATH' /></a>
+  #   </div>
+  #   <div>Photo taken on DATUM, at a height of HOOGTEm wiht coordinates (LAT, LONG).</div>"
+  #   html <- gsub('PHOTOPATH', x$SourceFile, html)
+  #   html <- gsub('DATUM', x$DateTimeOriginal, html)
+  #   html <- gsub('HOOGTE', x$GPSAltitude, html)
+  #   html <- gsub('LAT', x$GPSLatitude, html)
+  #   html <- gsub('LONG', x$GPSLongitude, html)
+  #   html
+  # 
+  # 
+  #   
+#}
+  
+  
+#dat3 <- generate_popup_html(dat2)
+
+# dat3$popup_html <- daply(files, 1, .fun=generate_popup_html)
+  
+
+    #create a pop up (onClick)
+#polygon_popup <- paste0("<strong>Name: </strong>", dat2$SourceFile, "<br>",
+#                        "<strong>Hight: </strong>", round(dat2$GPSAltitude,1))
+
+
+m <- leaflet() %>%
+
+  # Add tiles
+  addProviderTiles("OpenStreetMap.Mapnik", group = "Road map") %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%
+
+  addLegend(position = 'bottomright',opacity = 0.4, 
+            colors = 'blue', 
+            labels = 'Nijmegen',
+            title = 'cycling tour') %>%
+
+  # Layers control
+  addLayersControl(position = 'bottomright',
+    baseGroups = c("Road map", "Satellite"),
+    overlayGroups = c("Cycling routes", "Photo markers"),
+    options = layersControlOptions(collapsed = FALSE)) %>%
+
+  addPolylines(data=track, color='blue', group='Cycling routes') %>% 
+  
+  addMarkers(data = dat2, lng=dat2$GPSLongitude, lat=dat2$GPSLatitude,  
+                icon = greenLeafIcon, 
+                group = "Photo markers",
+               popup = popupImage(files, src = "local", embed = TRUE) 
+    )  
+m
+
+```
+
+
+
+
